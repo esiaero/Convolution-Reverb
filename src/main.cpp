@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cstdio>
 #include <cuda_runtime_api.h>
-
+#include "AudioFile.h"
 
 bool checkGPUAvailable() {
     int gpuDevice = 0;
@@ -21,6 +21,11 @@ bool checkGPUAvailable() {
  * C main function.
  */
 int main(int argc, char* argv[]) {
+    AudioFile<double> audioFile;
+    audioFile.load("./samples/falkland_tennis_court_ir.wav");
+
+
+
     bool gpuAvailable = checkGPUAvailable();
     //cudaDeviceProp deviceProp;
     //cudaGetDeviceProperties(&deviceProp, gpuDevice);
@@ -28,8 +33,6 @@ int main(int argc, char* argv[]) {
     // audio playback
 
     //CPU loadin
-
-
 
 
     return true;
