@@ -23,40 +23,51 @@ bool checkGPUAvailable() {
     }
 }
 
-// A simple function to compute the DFT. Unsurprisingly inefficient: O(N^2)
-void dft(std::vector<std::complex<double>> &signal) {
-    using namespace std::complex_literals;
-
-    for (std::size_t i = 0; i < signal.size(); ++i) {
-        std::complex<double> sum = 0;
-        for (std::size_t j = 0; j < signal.size(); ++j) {
-            sum += signal.at(j) * std::exp(-2. * 1i * M_PI * (double)i * (double)j / (double)signal.size());
+void convolution(std::vector<double> &a, std::vector<double> &b, std::vector<double> &out) {
+    out.resize(a.size() + b.size() - 1);
+    for (size_t i = 0; i < a.size(); ++i) {
+        for (size_t j = 0; j < b.size(); ++j) {
+            out.at(i + j) += a.at(i) * b.at(j);
         }
-        signal.at(i) = sum;
     }
 }
+
+/*
+* A simple function to compute the DFT. Unsurprisingly inefficient : O(N ^ 2)
+*/ 
+//void dft(std::vector<std::complex<double>> &signal) {
+//    using namespace std::complex_literals;
+//
+//    for (size_t i = 0; i < signal.size(); ++i) {
+//        std::complex<double> sum = 0;
+//        for (size_t j = 0; j < signal.size(); ++j) {
+//            sum += signal.at(j) * std::exp(-2. * 1i * M_PI * (double)i * (double)j / (double)signal.size());
+//        }
+//        signal.at(i) = sum;
+//    }
+//}
 
 void fftRecursive(std::vector<std::complex<double>> &signal) {
     using namespace std::complex_literals;
 
-    if ((signal.size() & (signal.size() - 1)) != 0) { // not pow2
-        std::cout << "Size was " << signal.size() << ", needs to be a pow2" << std::endl;
+    if (signal.size() <= 1) {
+        return;
     }
-    else if (signal.size() <= 2) {
-        dft(signal);
+    else if ((signal.size() & (signal.size() - 1)) != 0) { // not pow2
+        std::cout << "Size was " << signal.size() << ", needs to be a pow2" << std::endl;
     }
     else {
         std::vector<std::complex<double>> even, odd;
-        even.reserve(signal.size());
-        odd.reserve(signal.size());
-        for (std::size_t i = 0; i < signal.size(); ) {
+        even.reserve(signal.size() / 2);
+        odd.reserve(signal.size() / 2);
+        for (size_t i = 0; i < signal.size(); ) {
             even.push_back(signal.at(i++));
             odd.push_back(signal.at(i++));
         }
         fftRecursive(even);
         fftRecursive(odd);
 
-        for (std::size_t i = 0; i < signal.size(); ++i) {
+        for (size_t i = 0; i < signal.size(); ++i) {
             std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)i / (double)signal.size());
             int idx = i % (signal.size() / 2);
             signal.at(i) = even.at(idx) + val * odd.at(idx);
@@ -77,32 +88,48 @@ void ifft(std::vector<std::complex<double>>& signal) {
     }
     fftRecursive(signal);
     for (auto& v : signal) {
-        v = std::conj(v) / (double)signal.size();
+        v = std::conj(v) / (double)signal.size(); // Scaling N
     }
 }
 
 int main(int argc, char* argv[]) {
     AudioFile<double> ir, dry;
     int channel = 0;
+    std::string outputNaive = "./samples/naiveConvolved.wav";
+    std::string outputFilePath = "./samples/convolved.wav";
 
-    ir.load("./samples/falkland_tennis_court_ir.wav");
+    ir.load("./samples/dales_ir.wav");
     dry.load("./samples/aperture_dry.wav");
+
+    AudioFile<double> convolved;
+    convolved.setBitDepth(dry.getBitDepth());
+    convolved.setSampleRate(dry.getSampleRate());
+    convolved.setNumChannels(dry.getNumChannels());
+
     //std::cout << "IR Bit Depth: " << ir.getBitDepth() << std::endl;
     //std::cout << "IR Sample Rate: " << ir.getSampleRate() << std::endl;
     //std::cout << "IR Num Channels: " << ir.getNumChannels() << std::endl;
-    //std::cout << "IR Length in Seconds: " << ir.getLengthInSeconds() << std::endl;
+    std::cout << "IR Length in Seconds: " << ir.getLengthInSeconds() << std::endl;
     //std::cout << "Sample count: " << ir.samples[channel].size() << std::endl;
-
+    std::cout << std::endl;
     std::cout << "Dry Bit Depth: " << dry.getBitDepth() << std::endl;
     std::cout << "Dry Sample Rate: " << dry.getSampleRate() << std::endl;
     std::cout << "Dry Num Channels: " << dry.getNumChannels() << std::endl;
     std::cout << "Dry Length in Seconds: " << dry.getLengthInSeconds() << std::endl;
     std::cout << "Sample count: " << dry.samples[channel].size() << std::endl;
 
+    /////// Naive convolution test
+    //AudioFile<double>::AudioBuffer buffer;
+    //buffer.resize(1);
+    //convolution(ir.samples[channel], dry.samples[channel], buffer[channel]);
+    //convolved.setAudioBuffer(buffer);
+    //convolved.save(outputNaive, AudioFileFormat::Wave);
+    //-----
+
     // TODO: less clumsy way to handle this? may be change audio library
     // zero pad for cooleytukey
     std::vector<std::complex<double>> complexIR;
-    size_t padded = std::bit_ceil(ir.samples[channel].size());
+    size_t padded = std::bit_ceil(ir.samples[channel].size() + dry.samples[channel].size() - 1); 
     complexIR.reserve(padded);
     std::transform(ir.samples[channel].cbegin(), ir.samples[channel].cend(), std::back_inserter(complexIR),
         [](double r) { return std::complex<double>(r); });
@@ -111,47 +138,44 @@ int main(int argc, char* argv[]) {
     }
 
     std::vector<std::complex<double>> complexDry;
-    padded = std::bit_ceil(dry.samples[channel].size());
     complexDry.reserve(padded);
     std::transform(dry.samples[channel].cbegin(), dry.samples[channel].cend(), std::back_inserter(complexDry),
         [](double r) { return std::complex<double>(r); });
     for (size_t i = dry.samples[channel].size(); i < padded; ++i) {
         complexDry.push_back(std::complex(0.));
     }
-    
+
     fftRecursive(complexIR);
     fftRecursive(complexDry);
-    // Pointwise product
+
+    // Pointwise product (assume cDry > cIR length)
     for (size_t i = 0; i < complexDry.size(); ++i) {
-        complexDry.at(i) *= complexIR.at(i % complexIR.size());
+        complexDry.at(i) = complexDry.at(i) * complexIR.at(i);
     }
 
     ifft(complexDry);
 
-
-    AudioFile<double>::AudioBuffer buffer;
-    buffer.resize(1);
-    buffer[0].resize(complexDry.size());
+    double WET_GAIN = 0.115f;
+    // TODO: below needed to work because of agnostic scaling? leave some of the mixing and mastery to user.
+    // even so, convolved audio seems to peak/distort incorrectly
     for (size_t i = 0; i < complexDry.size(); ++i) {
-        buffer[channel][i] = complexDry.at(i).real();
-    }
+        double base = 0;
+        if (i < dry.samples[channel].size()) {
+            base = dry.samples[channel][i];
+        }
+        // THINK below as alternative parametrization?
+        // base + wet_mix_amount * (gain * real - base)
 
-    AudioFile<double> convolved;
-    convolved.setBitDepth(dry.getBitDepth());
-    convolved.setSampleRate(dry.getSampleRate());
-    convolved.setNumChannels(dry.getNumChannels());
-    //bool ok = convolved.setAudioBuffer(buffer);
-    //std::cout << ok << std::endl;
-    for (size_t i = 0; i < complexDry.size(); ++i) {
-        convolved.samples[channel].push_back(complexDry.at(i).real());
+        double val = base + WET_GAIN * complexDry.at(i).real();
+        // val = complexDry.at(i).real(); // this sound very bad? y
+
+        convolved.samples[channel].push_back(val);
     }
-    std::cout << convolved.samples[channel].size();
 
     //bool gpuAvailable = checkGPUAvailable();
     //cudaDeviceProp deviceProp;
     //cudaGetDeviceProperties(&deviceProp, gpuDevice);
 
-    std::string outputFilePath = "./samples/convolved.wav"; // change this to somewhere useful for you
     convolved.save(outputFilePath, AudioFileFormat::Wave);
 
     return 0;
