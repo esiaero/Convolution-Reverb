@@ -4,6 +4,7 @@
 #include <math.h>
 #include <complex>
 #include <bit>
+#include <chrono>
 
 #include <cuda_runtime_api.h>
 #include "AudioFile.h"
@@ -23,18 +24,9 @@ bool checkGPUAvailable() {
     }
 }
 
-void convolution(std::vector<double> &a, std::vector<double> &b, std::vector<double> &out) {
-    out.resize(a.size() + b.size() - 1);
-    for (size_t i = 0; i < a.size(); ++i) {
-        for (size_t j = 0; j < b.size(); ++j) {
-            out.at(i + j) += a.at(i) * b.at(j);
-        }
-    }
-}
-
 /*
 * A simple function to compute the DFT. Unsurprisingly inefficient : O(N ^ 2)
-*/ 
+*/
 //void dft(std::vector<std::complex<double>> &signal) {
 //    using namespace std::complex_literals;
 //
@@ -47,13 +39,13 @@ void convolution(std::vector<double> &a, std::vector<double> &b, std::vector<dou
 //    }
 //}
 
-void fftRecursive(std::vector<std::complex<double>> &signal) {
+void fft(std::vector<std::complex<double>>& signal) {
     using namespace std::complex_literals;
 
     if (signal.size() <= 1) {
         return;
     }
-    else if ((signal.size() & (signal.size() - 1)) != 0) { // not pow2
+    else if ((signal.size() & (signal.size() - 1)) != 0) {
         std::cout << "Size was " << signal.size() << ", needs to be a pow2" << std::endl;
     }
     else {
@@ -64,21 +56,15 @@ void fftRecursive(std::vector<std::complex<double>> &signal) {
             even.push_back(signal.at(i++));
             odd.push_back(signal.at(i++));
         }
-        fftRecursive(even);
-        fftRecursive(odd);
+        fft(even);
+        fft(odd);
 
-        for (size_t i = 0; i < signal.size(); ++i) {
-            std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)i / (double)signal.size());
-            int idx = i % (signal.size() / 2);
-            signal.at(i) = even.at(idx) + val * odd.at(idx);
+        for (std::size_t i = 0; i < signal.size() / 2; ++i) {
+            std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)i / (double)signal.size()) * odd.at(i);
+
+            signal.at(i) = even.at(i) + val;
+            signal.at(i + signal.size() / 2) = even.at(i) - val;
         }
-        // consider the below for faster? double check
-        //for (std::size_t i = 0; i < signal.size() / 2; ++i) {
-        //    std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)i / (double)signal.size()) * odd.at(i);
-
-        //    signal.at(i) = even.at(i) + val;
-        //    signal.at(i + signal.size() / 2) = even.at(i) - val;
-        //}
     }
 }
 
@@ -86,9 +72,63 @@ void ifft(std::vector<std::complex<double>>& signal) {
     for (auto& v : signal) {
         v = std::conj(v);
     }
-    fftRecursive(signal);
+    fft(signal);
     for (auto& v : signal) {
         v = std::conj(v) / (double)signal.size(); // Scaling N
+    }
+}
+
+void convolution(std::vector<double> &a, std::vector<double> &b, std::vector<double> &out) {
+    out.resize(a.size() + b.size() - 1);
+    for (size_t i = 0; i < a.size(); ++i) {
+        for (size_t j = 0; j < b.size(); ++j) {
+            out.at(i + j) += a.at(i) * b.at(j);
+        }
+    }
+}
+
+void fftConvolution(std::vector<double> &a, std::vector<double> &dry, std::vector<double> &out, double wetGain) {
+    size_t padded = std::bit_ceil(a.size() + dry.size() - 1); 
+    out.resize(padded);
+
+    // TODO: less clumsy way to handle this conversion? might need to change audio library
+    std::vector<std::complex<double>> complexIR;
+    complexIR.reserve(padded);
+    std::transform(a.cbegin(), a.cend(), std::back_inserter(complexIR),
+        [](double r) { return std::complex<double>(r); });
+    for (size_t i = a.size(); i < padded; ++i) {
+        complexIR.push_back(std::complex(0.));
+    }
+
+    std::vector<std::complex<double>> complexDry;
+    complexDry.reserve(padded);
+    std::transform(dry.cbegin(), dry.cend(), std::back_inserter(complexDry),
+        [](double r) { return std::complex<double>(r); });
+    for (size_t i = dry.size(); i < padded; ++i) {
+        complexDry.push_back(std::complex(0.));
+    }
+
+    fft(complexIR);
+    fft(complexDry);
+
+    // Pointwise product (assume cDry > cIR length)
+    for (size_t i = 0; i < complexDry.size(); ++i) {
+        complexDry.at(i) = complexDry.at(i) * complexIR.at(i);
+    }
+
+    ifft(complexDry);
+
+    // leave some of the mixing and mastery to user
+    for (size_t i = 0; i < complexDry.size(); ++i) {
+        double base = 0;
+        if (i < dry.size()) {
+            base = dry[i];
+        }
+        // THINK below as alternative parametrization?
+        // base + wet_mix_amount * (gain * real - base)
+
+        double val = base + wetGain * complexDry.at(i).real();
+        out.at(i) = val;
     }
 }
 
@@ -126,57 +166,21 @@ int main(int argc, char* argv[]) {
     //convolved.save(outputNaive, AudioFileFormat::Wave);
     //-----
 
-    // TODO: less clumsy way to handle this? may be change audio library
-    // zero pad for cooleytukey
-    std::vector<std::complex<double>> complexIR;
-    size_t padded = std::bit_ceil(ir.samples[channel].size() + dry.samples[channel].size() - 1); 
-    complexIR.reserve(padded);
-    std::transform(ir.samples[channel].cbegin(), ir.samples[channel].cend(), std::back_inserter(complexIR),
-        [](double r) { return std::complex<double>(r); });
-    for (size_t i = ir.samples[channel].size(); i < padded; ++i) {
-        complexIR.push_back(std::complex(0.));
-    }
-
-    std::vector<std::complex<double>> complexDry;
-    complexDry.reserve(padded);
-    std::transform(dry.samples[channel].cbegin(), dry.samples[channel].cend(), std::back_inserter(complexDry),
-        [](double r) { return std::complex<double>(r); });
-    for (size_t i = dry.samples[channel].size(); i < padded; ++i) {
-        complexDry.push_back(std::complex(0.));
-    }
-
-    fftRecursive(complexIR);
-    fftRecursive(complexDry);
-
-    // Pointwise product (assume cDry > cIR length)
-    for (size_t i = 0; i < complexDry.size(); ++i) {
-        complexDry.at(i) = complexDry.at(i) * complexIR.at(i);
-    }
-
-    ifft(complexDry);
-
+    AudioFile<double>::AudioBuffer buffer;
+    buffer.resize(1);
     double WET_GAIN = 0.115f;
-    // TODO: below needed to work because of agnostic scaling? leave some of the mixing and mastery to user.
-    // even so, convolved audio seems to peak/distort incorrectly
-    for (size_t i = 0; i < complexDry.size(); ++i) {
-        double base = 0;
-        if (i < dry.samples[channel].size()) {
-            base = dry.samples[channel][i];
-        }
-        // THINK below as alternative parametrization?
-        // base + wet_mix_amount * (gain * real - base)
 
-        double val = base + WET_GAIN * complexDry.at(i).real();
-        // val = complexDry.at(i).real(); // this sound very bad? y
+    auto start = std::chrono::high_resolution_clock::now();
+    fftConvolution(ir.samples[channel], dry.samples[channel], buffer[channel], WET_GAIN);
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = duration_cast<std::chrono::microseconds>(stop - start);
+    std::cout << "Duration: " << duration.count() << " microseconds" << std::endl;
 
-        convolved.samples[channel].push_back(val);
-    }
+    convolved.setAudioBuffer(buffer);
+    convolved.save(outputFilePath, AudioFileFormat::Wave);
 
     //bool gpuAvailable = checkGPUAvailable();
     //cudaDeviceProp deviceProp;
     //cudaGetDeviceProperties(&deviceProp, gpuDevice);
-
-    convolved.save(outputFilePath, AudioFileFormat::Wave);
-
     return 0;
 }
