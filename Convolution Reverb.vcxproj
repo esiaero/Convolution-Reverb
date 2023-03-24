@@ -79,13 +79,16 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="src\kernel.cu" />
+    <CudaCompile Include="src\gpufft.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\fft.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\AudioFile.h" />
+    <ClInclude Include="src\fft.hpp" />
+    <ClInclude Include="src\gpufft.cuh" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
