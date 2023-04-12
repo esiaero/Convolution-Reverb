@@ -29,7 +29,7 @@ __global__ void bitReversePermute(cuda::std::complex<double> *signal, int log2le
 
 __global__ void fftHelperKernel(cuda::std::complex<double>* signal, int m, int k, int size) {
     uint32_t j = (blockIdx.x * blockDim.x) + threadIdx.x;
-    if (k + j + m / 2 < size && j < m / 2) {
+    if (j < m / 2 && k + j + m / 2 < size) {
         cuda::std::complex<double> even = signal[k + j];
         cuda::std::complex<double> odd = signal[k + j + m / 2];
 
