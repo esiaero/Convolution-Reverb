@@ -42,6 +42,7 @@ constexpr float WET_GAIN = 0.155f; //TODO add a thing that decreases dry appropr
 
 std::vector<std::complex<float>> complexDry;
 std::vector<std::complex<float>> complexIR;
+std::vector<float> olaBuffer;
 
 static int callback(
     const void* inputBuffer,
@@ -77,8 +78,17 @@ static int callback(
 
     in = (const float*)inputBuffer;
     double max = 0;
-    for (i = 0; i < framesPerBuffer; ++i) {
-        *out++ = *in++ + WET_GAIN * complexDry.at(i).real();
+    for (i = 0; i < complexDry.size(); ++i) {
+        if (i < framesPerBuffer) { // assume overlapping "echo" < framesPerBuffer ?
+            *out = *in++ + WET_GAIN * complexDry.at(i).real();
+            if (i < olaBuffer.size()) {
+                *out += olaBuffer.at(i);
+            }
+            out++;
+        }
+        else {
+            olaBuffer.at(i - framesPerBuffer) = WET_GAIN * complexDry.at(i).real();
+        }
     }
 
     return paContinue;
@@ -106,6 +116,8 @@ int main(void)
     fft(complexIR);
 
     complexDry.resize(padded, std::complex(0.f));
+
+    olaBuffer.resize(padded - FRAMES_PER_BUFFER, 0.f);
 
     PaStream* stream;
     PaError err = Pa_Initialize();
