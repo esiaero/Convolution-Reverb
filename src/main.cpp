@@ -9,7 +9,7 @@
 #include "AudioFile.h"
 
 /*
- * This duplex audio setup is from an example provided by PortAudio
+ * This duplex audio setup is based from an example provided by PortAudio
  *
  * This program uses the PortAudio Portable Audio Library.
  * For more information see: http://www.portaudio.com
@@ -79,8 +79,11 @@ static int callback(
     in = (const float*)inputBuffer;
     double max = 0;
     for (i = 0; i < complexDry.size(); ++i) {
-        if (i < framesPerBuffer) { // assume overlapping "echo" < framesPerBuffer ?
+        if (i < framesPerBuffer) { 
             *out = *in++ + WET_GAIN * complexDry.at(i).real();
+
+            // assume std::bit_ceil(framesPerBuffer + ir.size() - 1) - framesPerBuffer < framesPerBuffer
+            // otherwise buffer needs to add to itself
             if (i < olaBuffer.size()) {
                 *out += olaBuffer.at(i);
             }
@@ -98,7 +101,7 @@ int main(void)
 {
     AudioFile<float> irFile;
     int channel = 0;
-    std::string irPath = "./samples/church_ir.wav";
+    std::string irPath = "./samples/dales_ir.wav";
     irFile.load(irPath);
     std::cout << "Reading IR file: " << irPath << std::endl;;
     std::cout << "    Sampling Rate: " << irFile.getSampleRate() << std::endl;
@@ -145,7 +148,7 @@ int main(void)
     outputParameters.suggestedLatency = Pa_GetDeviceInfo(outputParameters.device)->defaultHighInputLatency;
     outputParameters.hostApiSpecificStreamInfo = NULL;
 
-    err = Pa_OpenStream( // try defaultopen with 1, 1 ?
+    err = Pa_OpenStream( // try defaultopen with 1 1
         &stream,
         &inputParameters,
         &outputParameters,
