@@ -1,226 +1,162 @@
 #include <iostream>
 #include <cstdio>
-#define _USE_MATH_DEFINES
-#include <math.h>
-#include <complex>
 #include <bit>
 #include <chrono>
-#include <cuda_runtime_api.h>
 
+#include "fft.hpp"
+
+#include "portaudio.h"
 #include "AudioFile.h"
 
-bool checkGPUAvailable() {
-    int gpuDevice = 0;
-    int device_count = 0;
-    cudaGetDeviceCount(&device_count);
-    //std::cout << "count of cuda devices: " << device_count << std::endl;
-    if (gpuDevice > device_count) {
-        std::cout << "Error: GPU device number is greater than the number of devices!" <<
-            "Perhaps a CUDA-capable GPU is not installed?" << std::endl;
-        return false;
-    }
-    else {
-        return true;
-    }
-}
-
 /*
-* A simple function to compute the DFT. Unsurprisingly inefficient : O(N ^ 2)
-*/
-//void dft(std::vector<std::complex<double>> &signal) {
-//    using namespace std::complex_literals;
-//
-//    for (size_t i = 0; i < signal.size(); ++i) {
-//        std::complex<double> sum = 0;
-//        for (size_t j = 0; j < signal.size(); ++j) {
-//            sum += signal.at(j) * std::exp(-2. * 1i * M_PI * (double)i * (double)j / (double)signal.size());
-//        }
-//        signal.at(i) = sum;
-//    }
-//}
+ * This duplex audio setup is from an example provided by PortAudio
+ *
+ * This program uses the PortAudio Portable Audio Library.
+ * For more information see: http://www.portaudio.com
+ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
+ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
-// Recursive, in-place
-//void fft(std::vector<std::complex<double>>& signal) {
-//    using namespace std::complex_literals;
-//
-//    if (signal.size() <= 1) {
-//        return;
-//    }
-//    else if ((signal.size() & (signal.size() - 1)) != 0) {
-//        std::cout << "Size was " << signal.size() << ", needs to be a pow2" << std::endl;
-//    }
-//    else {
-//        std::vector<std::complex<double>> even, odd;
-//        even.reserve(signal.size() / 2);
-//        odd.reserve(signal.size() / 2);
-//        for (size_t i = 0; i < signal.size(); ) {
-//            even.push_back(signal.at(i++));
-//            odd.push_back(signal.at(i++));
-//        }
-//        fft(even);
-//        fft(odd);
-//
-//        for (std::size_t i = 0; i < signal.size() / 2; ++i) {
-//            std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)i / (double)signal.size()) * odd.at(i);
-//
-//            signal.at(i) = even.at(i) + val;
-//            signal.at(i + signal.size() / 2) = even.at(i) - val;
-//        }
-//    }
-//}
+#define PA_SAMPLE_TYPE      paFloat32
+constexpr int SAMPLE_RATE = 44100;
+constexpr int FRAMES_PER_BUFFER = 131072;
+constexpr float WET_GAIN = 0.155f; //TODO add a thing that decreases dry appropriately as well?
 
-// Breadth-first implementation, O(1) storage, ~ 1/2 runtime of recusrive
-void fft(std::vector<std::complex<double>>& signal) {
-    // Bit reverse permutation... kind of scuffed
-    // http://graphics.stanford.edu/~seander/bithacks.html
-    int log2len = (int)(round(std::log2(signal.size())));
-    for (uint32_t a = 0; a < signal.size(); ++a) {
-        uint32_t b = a;
-        // Swap in groups of 1, 2, 4, 8, 16...
-        b = (((b & 0XAAAAAAAA) >> 1) | ((b & 0x55555555) << 1));
-        b = (((b & 0XCCCCCCCC) >> 2) | ((b & 0x33333333) << 2));
-        b = (((b & 0XF0F0F0F0) >> 4) | ((b & 0x0F0F0F0F) << 4));
-        b = (((b & 0xFF00FF00) >> 8) | ((b & 0x00FF00FF) << 8));
-        b = ((b >> 16) | (b << 16)) >> (32 - log2len);
+std::vector<std::complex<float>> complexDry;
+std::vector<std::complex<float>> complexIR;
 
-        if (b > a) {
-            std::iter_swap(signal.begin() + a, signal.begin() + b);
+static int callback(
+    const void* inputBuffer,
+    void* outputBuffer,
+    unsigned long framesPerBuffer,
+    const PaStreamCallbackTimeInfo* timeInfo,
+    PaStreamCallbackFlags statusFlags,
+    void* userData)
+{
+    float* out = (float*)outputBuffer;
+    const float* in = (const float*)inputBuffer;
+    unsigned int i;
+    (void)timeInfo; /* Prevent unused variable warnings. */
+    (void)statusFlags;
+    (void)userData;
+
+    for (i = 0; i < complexDry.size(); ++i) {
+        if (i < framesPerBuffer) {
+            complexDry.at(i) = std::complex<float>(*in++);
+        }
+        else {
+            complexDry.at(i) = 0;
         }
     }
 
-    for (int m = 2; m <= signal.size(); m <<= 1) {
-        for (int k = 0; k < signal.size(); k += m) {
-            for (int j = 0; j < m / 2; ++j) {
-                std::complex<double> even = signal.at(k + j);
-                std::complex<double> odd = signal.at(k + j + m / 2);
-                
-                double term = -2. * M_PI * (double)j / (double)m;
-                std::complex<double> val(cos(term), sin(term));
-                val *= odd;
-                // Below is minutely slower? Uncertain
-                // using namespace std::complex_literals;
-                // std::complex<double> val = std::exp(-2. * 1i * M_PI * (double)j / (double)m) * odd;
-
-                signal.at(k + j) = even + val;
-                signal.at(k + j + m / 2) = even - val;
-            }
-        }
-    }
-}
-
-void ifft(std::vector<std::complex<double>>& signal) {
-    for (auto& v : signal) {
-        v = std::conj(v);
-    }
-    fft(signal);
-    for (auto& v : signal) {
-        v = std::conj(v) / (double)signal.size(); // Scaling N
-    }
-}
-
-void convolution(std::vector<double> &a, std::vector<double> &b, std::vector<double> &out) {
-    out.resize(a.size() + b.size() - 1);
-    for (size_t i = 0; i < a.size(); ++i) {
-        for (size_t j = 0; j < b.size(); ++j) {
-            out.at(i + j) += a.at(i) * b.at(j);
-        }
-    }
-}
-
-void fftConvolution(std::vector<double> &dry, std::vector<double> &ir, std::vector<double> &out, double wetGain) {
-    size_t padded = std::bit_ceil(ir.size() + dry.size() - 1);
-    out.resize(padded);
-
-    // TODO: less clumsy way to handle this conversion? might need to change audio library
-    // reinterpret cast may be possible
-    std::vector<std::complex<double>> complexDry;
-    complexDry.reserve(padded);
-    std::transform(dry.cbegin(), dry.cend(), std::back_inserter(complexDry),
-        [](double r) { return std::complex<double>(r); });
-    for (size_t i = dry.size(); i < padded; ++i) {
-        complexDry.push_back(std::complex(0.));
-    }
-
-    std::vector<std::complex<double>> complexIR;
-    complexIR.reserve(padded);
-    std::transform(ir.cbegin(), ir.cend(), std::back_inserter(complexIR),
-        [](double r) { return std::complex<double>(r); });
-    for (size_t i = ir.size(); i < padded; ++i) {
-        complexIR.push_back(std::complex(0.));
-    }
-
-    fft(complexIR);
     fft(complexDry);
 
-    // Pointwise product (assume cDry > cIR length)
-    for (size_t i = 0; i < complexDry.size(); ++i) {
-        complexDry.at(i) = complexDry.at(i) * complexIR.at(i);
+    for (i = 0; i < complexDry.size(); ++i) { // dry vs ir length?
+        complexDry.at(i) *= complexIR.at(i);
     }
 
     ifft(complexDry);
 
-    // leave some of the mixing and mastery to user
-    for (size_t i = 0; i < complexDry.size(); ++i) {
-        double base = 0;
-        if (i < dry.size()) {
-            base = dry[i];
-        }
-        // THINK below as alternative parametrization?
-        // base + wet_mix_amount * (gain * real - base)
-
-        double val = base + wetGain * complexDry.at(i).real();
-        out.at(i) = val;
+    in = (const float*)inputBuffer;
+    double max = 0;
+    for (i = 0; i < framesPerBuffer; ++i) {
+        *out++ = *in++ + WET_GAIN * complexDry.at(i).real();
     }
+
+    return paContinue;
 }
 
-int main(int argc, char* argv[]) {
-    AudioFile<double> ir, dry;
-    AudioFile<double>::AudioBuffer buffer;
+int main(void)
+{
+    AudioFile<float> irFile;
     int channel = 0;
-    double WET_GAIN = 0.115f;
-    std::string dryPath = "./samples/aperture_dry.wav";
-    std::string irPath = "./samples/dales_ir.wav";
-
-    std::string outputNaive = "./samples/naiveConvolved.wav";
-    std::string outputPath = "./samples/convolved.wav";
-
-    buffer.resize(1);
-    ir.load(irPath);
-    dry.load(dryPath);
-
-    //std::cout << "IR Bit Depth: " << ir.getBitDepth() << std::endl;
-    //std::cout << "IR Sample Rate: " << ir.getSampleRate() << std::endl;
-    //std::cout << "IR Num Channels: " << ir.getNumChannels() << std::endl;
-    std::cout << "IR Length in Seconds: " << ir.getLengthInSeconds() << std::endl;
-    //std::cout << "Sample count: " << ir.samples[channel].size() << std::endl;
+    std::string irPath = "./samples/church_ir.wav";
+    irFile.load(irPath);
+    std::cout << "Reading IR file: " << irPath << std::endl;;
+    std::cout << "    Sampling Rate: " << irFile.getSampleRate() << std::endl;
+    std::cout << "    Num Channels: " << irFile.getNumChannels() << std::endl;
+    std::cout << "    Sample Count: " << irFile.samples[channel].size() << std::endl;
+    std::cout << "    Length (s): " << irFile.getLengthInSeconds() << std::endl;
     std::cout << std::endl;
-    std::cout << "Dry Bit Depth: " << dry.getBitDepth() << std::endl;
-    std::cout << "Dry Sample Rate: " << dry.getSampleRate() << std::endl;
-    std::cout << "Dry Num Channels: " << dry.getNumChannels() << std::endl;
-    std::cout << "Dry Length in Seconds: " << dry.getLengthInSeconds() << std::endl;
-    std::cout << "Sample count: " << dry.samples[channel].size() << std::endl;
 
+    std::vector<float> ir = irFile.samples[channel];
+    size_t padded = std::bit_ceil(ir.size() + FRAMES_PER_BUFFER - 1);
+    complexIR.reserve(padded);
+    std::transform(ir.cbegin(), ir.cend(), std::back_inserter(complexIR),
+        [](float r) { return std::complex<float>(r); });
+    complexIR.resize(padded, std::complex(0.f));
+    fft(complexIR);
 
-    //bool gpuAvailable = checkGPUAvailable();
-    //cudaDeviceProp deviceProp;
-    //cudaGetDeviceProperties(&deviceProp, gpuDevice);
+    complexDry.resize(padded, std::complex(0.f));
 
-    // Main operation
-    auto start = std::chrono::high_resolution_clock::now();
-    fftConvolution(dry.samples[channel], ir.samples[channel], buffer[channel], WET_GAIN);
-    auto stop = std::chrono::high_resolution_clock::now();
-    // End main operation
+    PaStream* stream;
+    PaError err = Pa_Initialize();
+    if (err != paNoError) goto error;
 
+    PaStreamParameters inputParameters, outputParameters;
 
-    auto duration = duration_cast<std::chrono::microseconds>(stop - start);
-    std::cout << "Duration: " << duration.count() << " microseconds" << std::endl;
+    inputParameters.device = Pa_GetDefaultInputDevice(); /* default input device */
+    if (inputParameters.device == paNoDevice) {
+        fprintf(stderr, "Error: No default input device.\n");
+        goto error;
+    }
+    inputParameters.channelCount = 1;
+    inputParameters.sampleFormat = PA_SAMPLE_TYPE;
+    inputParameters.suggestedLatency = Pa_GetDeviceInfo(inputParameters.device)->defaultHighInputLatency;
+    inputParameters.hostApiSpecificStreamInfo = NULL;
 
-    AudioFile<double> convolved;
-    convolved.setBitDepth(dry.getBitDepth());
-    convolved.setSampleRate(dry.getSampleRate());
-    convolved.setNumChannels(dry.getNumChannels());
-    convolved.setAudioBuffer(buffer);
-    convolved.save(outputPath, AudioFileFormat::Wave);
+    outputParameters.device = Pa_GetDefaultOutputDevice(); /* default output device */
+    if (outputParameters.device == paNoDevice) {
+        fprintf(stderr, "Error: No default output device.\n");
+        goto error;
+    }
+    outputParameters.channelCount = 1;
+    outputParameters.sampleFormat = PA_SAMPLE_TYPE;
+    outputParameters.suggestedLatency = Pa_GetDeviceInfo(outputParameters.device)->defaultHighInputLatency;
+    outputParameters.hostApiSpecificStreamInfo = NULL;
 
+    err = Pa_OpenStream( // try defaultopen with 1, 1 ?
+        &stream,
+        &inputParameters,
+        &outputParameters,
+        SAMPLE_RATE,
+        FRAMES_PER_BUFFER,
+        paNoFlag,
+        callback,
+        NULL);
+    if (err != paNoError) goto error;
+
+    err = Pa_StartStream(stream);
+    if (err != paNoError) goto error;
+
+    printf("Press ENTER to stop program.\n");
+    getchar();
+    err = Pa_CloseStream(stream);
+    if (err != paNoError) goto error;
+
+    Pa_Terminate();
     return 0;
+
+error:
+    Pa_Terminate();
+    std::cerr << "PortAudio error occurred. Error message: " << Pa_GetErrorText(err) << std::endl;
+    return -1;
 }

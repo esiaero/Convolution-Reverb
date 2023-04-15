@@ -1,9 +1,13 @@
 # Convolution Reverb
 
-What is...
+## What is...
 
-How to use...
+## How to use...
 
+
+## Disclaimer
+
+It is not recommended to use this for critical programs; it should be treated as a learning exercise.
 
 # Attributions
 IR files:
