@@ -13,8 +13,6 @@
 #pragma comment(lib, "Winmm.lib")
 #include <mmsystem.h>
 
-#include "portaudio.h"
-
 bool checkGPUAvailable() {
     int gpuDevice = 0;
     int device_count = 0;
@@ -84,7 +82,7 @@ int main(int argc, char* argv[]) {
     AudioFile<double>::AudioBuffer buffer;
     int channel = 0;
     double WET_GAIN = 0.155f; //TODO add a thing that decreases dry appropriately as well?
-    std::string dryPath = "./samples/test_audio.wav";
+    std::string dryPath = "./samples/aperture_dry.wav";
     std::string irPath = "./samples/ftc_ir.wav";
 
     std::string outputNaive = "./samples/naiveConvolved.wav";
@@ -108,16 +106,14 @@ int main(int argc, char* argv[]) {
     std::cout << "    Length in Seconds: " << dry.getLengthInSeconds() << std::endl;
     //std::cout << "Sample count: " << dry.samples[channel].size() << std::endl;
 
+    // Main operation
+    auto start = std::chrono::high_resolution_clock::now();
+    fftConvolution(dry.samples[channel], ir.samples[channel], buffer[channel], WET_GAIN);
     // GPU Path
     //bool gpuAvailable = checkGPUAvailable(); // TODO errors if no GPU available
     //cudaDeviceProp deviceProp;
     //cudaGetDeviceProperties(&deviceProp, gpuDevice);
-
-    // Main operation
-    auto start = std::chrono::high_resolution_clock::now();
-    fftConvolution(dry.samples[channel], ir.samples[channel], buffer[channel], WET_GAIN);
     //gpuFFTConvolution(dry.samples[channel], ir.samples[channel], buffer[channel], WET_GAIN);
-    //olaFFTConv(dry.samples[channel], ir.samples[channel], buffer[channel], WET_GAIN, 4096);
     auto stop = std::chrono::high_resolution_clock::now();
     // End main operation
 
