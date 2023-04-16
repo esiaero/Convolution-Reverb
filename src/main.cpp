@@ -37,8 +37,8 @@
 
 #define PA_SAMPLE_TYPE      paFloat32
 constexpr int SAMPLE_RATE = 44100;
-constexpr int FRAMES_PER_BUFFER = 131072;
-constexpr float WET_GAIN = 0.155f; //TODO add a thing that decreases dry appropriately as well?
+constexpr int FRAMES_PER_BUFFER = 32768; // need larger buffer depending on the IR size due to lazy OLA special case. 
+constexpr float WET_GAIN = 0.155f;
 
 std::vector<std::complex<float>> complexDry;
 std::vector<std::complex<float>> complexIR;
@@ -101,7 +101,7 @@ int main(void)
 {
     AudioFile<float> irFile;
     int channel = 0;
-    std::string irPath = "./samples/dales_ir.wav";
+    std::string irPath = "./samples/dales_ir.wav"; // dales_ir can work with shorter times.
     irFile.load(irPath);
     std::cout << "Reading IR file: " << irPath << std::endl;;
     std::cout << "    Sampling Rate: " << irFile.getSampleRate() << std::endl;
